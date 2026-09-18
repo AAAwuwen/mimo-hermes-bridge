@@ -1,0 +1,23 @@
+{
+  // ---------------------------------------------------------------------
+  // Hermes Agent MCP server -- paste this into
+  //   %USERPROFILE%\.config\mimocode\mimocode.jsonc   (Windows / PowerShell)
+  //   $HOME/.config/mimocode/mimocode.jsonc           (Git-Bash / MSYS / *nix)
+  // or let `python bridge.py setup` merge it for you (it backs the file up
+  // first and prints the backup path).
+  //
+  // Replace {{HERMES_BIN}} with the ABSOLUTE path to your hermes launcher,
+  // e.g. %LOCALAPPDATA%\hermes\bin\hermes.exe on Windows, or $(which hermes)
+  // elsewhere. A bare "hermes" is not enough: MiMoCode spawns the command
+  // without a shell, so PATH lookup is not guaranteed.
+  //
+  // JSONC is fine -- comments and trailing commas are allowed in this file.
+  // ---------------------------------------------------------------------
+  "mcp": {
+    "hermes": {
+      "type": "local",
+      "command": ["{{HERMES_BIN}}", "mcp", "serve"],
+      "enabled": true
+    }
+  }
+}

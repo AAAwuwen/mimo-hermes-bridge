@@ -1,0 +1,30 @@
+# secrets and local state produced while using bridge.py
+*.bak.*
+*.prerestore.*
+*.env
+.env
+bridge.config.json
+
+# local collaboration artifacts (author's machine only)
+*.log
+payload-*.json
+
+# scratch files from maintenance passes
+*.snap0
+*.preclean
+
+# local tooling state -- .mimocode/ is a vendored npm tree, never our code
+.mimocode/
+.ruff_cache/
+.mypy_cache/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

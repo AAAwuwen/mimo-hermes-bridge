@@ -1,0 +1,16 @@
+# The requirements contract is 100 columns (see PROJECT_BLUEPRINT.md); ruff's own
+# default is 88, so the limit has to be stated here or every long line is flagged.
+line-length = 100
+
+# `.mimocode/` is a vendored npm dependency tree, not code from this repo.
+extend-exclude = [".mimocode"]
+
+# Same rule set as the command in AGENTS.md, so a bare `uvx ruff check .` and the
+# explicit `--select` invocation cannot disagree.
+[lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF", "TRY", "PL", "PERF", "RET", "ARG"]
+
+# No per-file-ignores, no noqa: at line-length 100 nothing needs suppressing.
+# Seven print() lines sit between 89 and 99 columns -- under the contract, so they
+# stand on their own merits rather than behind an exemption.  Verified with:
+#   uvx ruff check --isolated --select E501 --line-length 100 .
