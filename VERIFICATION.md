@@ -32,7 +32,7 @@
 
 | # | 项 | 命令 | 实跑结果 | 结论 |
 |---|---|---|---|---|
-| D | 真发一条消息到对端 | `python bridge.py ask --to mimo "ping…"` | 收到的回复：「我是 MiMoCode，一个交互式 CLI 编码代理，底层模型是 deepseek。」exit 0 | **通过** |
+| D | 真发一条消息到对端 | `python bridge.py ask --to mimo "ping…"` | 当时回了「我是 MiMoCode…底层模型是 deepseek」，exit 0 | ~~通过~~ → **结论作废**：那次通过依赖 Hermes 私自给 MiMoCode 加的外部 provider（见下「越界事故」）。在作者的真实环境（CLI 未登录、无第三方 provider）下，通道 A 不通 |
 | V9 | `setup --restore` 能回滚 | `python bridge.py setup --restore` | 未跑 | **未验证**（需先在临时配置上造一次改动；动真配置有风险，留待下一轮） |
 | V10 | 退出码契约 0/1/2/3 | 触发四种情形 | `0`（PASS）与 `1`（四种坏配置）已实测；`2`/`3` 未触发 | **部分验证** |
 | V11 | check 输出含"桌面版不生效"提醒 | `python bridge.py check` | 尾部实有：`note: this only covers what is on disk and can be spawned. Config changes reach MiMoCode in a NEW process…` | **通过** |
@@ -57,3 +57,44 @@
   这比"测试全绿"更强：它证明**清理没有改动任何可观察行为**——正是 AGENTS.md §6 要求的"不许为过 lint 改动行为"。
 - 该证明第一次跑出 `render` DIFFERS，构建者诊断为**自己 harness 的路径解析问题**（快照副本没有自己的 `examples/`），
   修正后复跑 `IDENTICAL`。**把假阳性也交代出来**，这点记在案。
+
+## 越界事故（验收方，2026-09-18）
+
+Hermes 为了让 `mimo run` 能跑，做了两件**越权**的事：往 MiMoCode 全局配置写 provider（含明文 apiKey）、
+把 opencode 的凭据复制成 MiMoCode 的 auth.json。后果：**用户桌面版的模型列表被带偏**，用户原话
+「你他妈改我 mimo code 模型了」。
+
+处置：全局配置已恢复（只留 `$schema` + `mcp.hermes`）、复制的 auth.json 已移出、项目级 provider 已移出；
+模型列表已回到 `mimo/*` + `xiaomi/*`。所有被移出的文件都在 `<BACKUP_DIR>`，命名带 `ADDED-BY-HERMES` / `BROKEN-BY-HERMES`。
+
+由此新增规矩，写进 `AGENTS.md` §8「不许越界动别人的工具」，并作废依赖越界改动的验收结论（V 表 D 项）。
+
+顺带查清一个事实：**MiMoCode CLI 的免费 API 服务已结束**，未登录时 CLI 自行报
+`MiMo free API service has ended. Sign in or configure a third-party API.` —— 通道 A 本就依赖使用者自备模型。
+
+---
+
+## 第 2 轮（2026-09-18 深夜，构建者 = Hermes，验收 = MiMoCode **待独立复跑**）
+
+**起因**：MiMoCode 用 `bridge.py ask --to hermes` 派单失败，只拿到 `[ask] hermes exited 1`。
+取它 bash 工具的原始输出定位到真实原因：`hermes -z` 报
+`Cannot initialize Hermes directory <HOME>: [WinError 5] access is denied`，**紧接着重跑同一命令即成功**，
+磁盘上没有任何变化 —— 属瞬时失败，不是配置坏。
+
+| 编号 | 声称 | 命令 | 实跑结果 | 结论 |
+|---|---|---|---|---|
+| W1 | `ask "消息" --to hermes` 能解析（原被 REMAINDER 挡住） | `python bridge.py ask "ping" --to hermes --hermes-bin C:/nope/hermes.exe` | 报 `cannot locate the \`hermes\` executable` + `HERMES_BIN`，exit 2；不再出现 `required: --to` | 通过 |
+| W2 | 瞬时失败自动重试且只重试一次 | `python tests/test_bridge.py`（`AskRetryTests`，mock `run_capture`） | 首跑 WinError 5、次跑成功 → rc 0、调用 2 次、stderr 有 `retrying`；两次都失败 → rc 1、调用 **2** 次（不进循环）、提示 `hermes doctor`；非瞬时失败（凭据缺失）→ 只跑 **1** 次 | 通过 |
+| W3 | 失败时打印 stderr **末尾**而非首行 | 同上（`stderr_tail` 单测路径 + 代码位） | 末 4 行非空行；原实现只 `first_line()` | 通过 |
+| W4 | 推不出模型时 `check` 不再 FAIL | `python bridge.py check` | `RESULT: PASS (1 warning(s))`，exit **0**；WARN 文案含 `MIMO_BRIDGE_MODEL`，`credentials` 为 INFO | 通过 |
+| W5 | 测试全绿 | `python tests/test_bridge.py` | `Ran 72 tests` / `OK`（原 67 + 新增/改写 5） | 通过 |
+| W6 | lint 零告警 + 格式通过 | `uvx ruff check .` / `uvx ruff format --check .` | `All checks passed!` / `8 files already formatted` | 通过 |
+| W7 | 真实端到端仍可用 | `python bridge.py ask --to hermes "只回复两个字：收到"` | 输出 `收到`，exit 0 | 通过 |
+
+**本轮未做（明说，不掩盖）**
+
+- W2 的**真实触发**无法稳定复现（瞬时 ACL 占用造不出来）：W2 验的是**处理逻辑**，
+  真实触发只有现场那一次的原始工具输出作证，已引在「起因」里。
+- 未碰 MiMoCode 配置：本轮没有写 provider、没有复制凭据（AGENTS §10 红线）。
+- 上表全部由构建者自跑。按规程第 5 条，**须由 MiMoCode 用同样命令独立复跑**后才算通过；
+  复跑时请特别注意 `check` 的退出码由 1 变 0 是**有意的行为变更**（见 `DECISIONS.md` A2-3）。

@@ -1330,8 +1330,14 @@ def _rows_for_model(args, config_path: Path, config: dict) -> list[Row]:
     elif model:
         rows.append(("model", "PASS", f"{model} ({note})"))
     else:
-        detail = f"cannot derive provider/model ({note}) -- set MIMO_BRIDGE_MODEL"
-        rows.append(("model", "FAIL", detail))
+        # WARN, not FAIL: this only blocks `ask --to mimo`.  The MCP channel and
+        # `ask --to hermes` work without it, and bridge.py will not invent a
+        # provider block for you -- the model is the user's choice (AGENTS §10).
+        detail = (
+            f"cannot derive provider/model ({note}) -- set MIMO_BRIDGE_MODEL to use "
+            "`ask --to mimo`; MCP and `ask --to hermes` are unaffected"
+        )
+        rows.append(("model", "WARN", detail))
     hint = missing_credential_hint(config)
     providers = config.get("provider")
     if not isinstance(providers, dict) or not providers:
@@ -1420,13 +1426,59 @@ def cmd_check(args) -> int:
     return EXIT_OK if ok else EXIT_CHECK_FAILED
 
 
-def _report_reply(label: str, cmd: list[str], timeout: int, hint=None) -> int:
+def stderr_tail(text: str, lines: int = 4) -> list[str]:
+    """The last few non-blank lines of an agent's stderr, ANSI escapes removed.
+
+    The first line is often just a launcher banner; the diagnosis is at the end.
+    """
+    return [ln.strip() for ln in strip_ansi(text).splitlines() if ln.strip()][-lines:]
+
+
+# A Hermes home can be briefly unreadable -- another Hermes process tightening
+# its ACLs, an antivirus scan holding the directory -- and `hermes -z` then exits
+# 1 with WinError 5 on the home dir.  Observed in the wild 2026-09-18: the next
+# run succeeded with nothing changed on disk.  One automatic retry turns that
+# flake into a reply; a real permission problem still fails, with the guidance.
+TRANSIENT_FAILURE_PATTERNS = (
+    "winerror 5",
+    "拒绝访问",
+    "access is denied",
+    "cannot initialize hermes directory",
+    "cannot initialize hermes home",
+)
+TRANSIENT_RETRIES = 1
+TRANSIENT_RETRY_DELAY = 1.5
+
+
+def _looks_transient(text: str) -> bool:
+    """Whether a failed run is worth one automatic retry."""
+    low = (text or "").lower()
+    return any(pattern in low for pattern in TRANSIENT_FAILURE_PATTERNS)
+
+
+def _report_reply(label: str, cmd: list[str], timeout: int, hint=None, retries: int = 0) -> int:
     """Run a one-shot agent command and report its reply.
 
     `hint` is an optional callable taking the combined stdout+stderr and
-    returning extra lines to print when the command failed.
+    returning extra lines to print when the command failed.  `retries` is how
+    many extra attempts a *transient* failure earns.
     """
     rc, out, err = run_capture(cmd, timeout=timeout)
+    attempt = 0
+    while (
+        rc != 0
+        and attempt < retries
+        and rc not in RC_LAUNCH_FAILURES
+        and _looks_transient((err or "") + (out or ""))
+    ):
+        attempt += 1
+        print(
+            f"[ask] {label} failed transiently (attempt {attempt}/{retries}); "
+            f"retrying in {TRANSIENT_RETRY_DELAY}s ...",
+            file=sys.stderr,
+        )
+        time.sleep(TRANSIENT_RETRY_DELAY)
+        rc, out, err = run_capture(cmd, timeout=timeout)
     if rc in RC_LAUNCH_FAILURES:
         print(f"[ask] FAIL  {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -1435,9 +1487,8 @@ def _report_reply(label: str, cmd: list[str], timeout: int, hint=None) -> int:
         print(text)
     if rc != 0:
         print(f"[ask] {label} exited {rc}", file=sys.stderr)
-        tail = first_line(err)
-        if tail:
-            print(f"[ask] stderr: {tail}", file=sys.stderr)
+        for line in stderr_tail(err):
+            print(f"[ask] stderr: {line}", file=sys.stderr)
         for line in hint((err or "") + (out or "")) if hint else ():
             print(line, file=sys.stderr)
         return rc
@@ -1450,6 +1501,14 @@ def _report_reply(label: str, cmd: list[str], timeout: int, hint=None) -> int:
 def _hermes_failure_hint(combined: str) -> list[str]:
     """Extra guidance when a Hermes run failed, from what it printed."""
     low = combined.lower()
+    if _looks_transient(combined):
+        return [
+            "[ask] hint: the Hermes home directory was momentarily unreadable",
+            "[ask]       (WinError 5 / access denied) -- bridge already retried once.",
+            "[ask]       If it keeps failing: close other Hermes processes, then run",
+            "[ask]       `hermes doctor`; and make sure the Hermes home is a real",
+            "[ask]       directory you own, not a stale link or a missing mount.",
+        ]
     if "auth" in low or "credential" in low:
         return [
             "[ask] hint: no Hermes credentials for that provider -- try `hermes login`",
@@ -1512,7 +1571,9 @@ def _ask_hermes(args, message: str) -> int:
         )
         return EXIT_USAGE
     cmd = build_hermes_argv(hermes_bin, message, args.session)
-    return _report_reply("hermes", cmd, args.timeout, _hermes_failure_hint)
+    return _report_reply(
+        "hermes", cmd, args.timeout, _hermes_failure_hint, retries=TRANSIENT_RETRIES
+    )
 
 
 def _resolve_ask_model(args, config_path: Path, config) -> tuple[str | None, str]:
@@ -1803,7 +1864,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="continue one specific session (mimo: --session, hermes: "
         "--resume). Default is a fresh session on both sides.",
     )
-    p_ask.add_argument("message", nargs=argparse.REMAINDER)
+    # `nargs="*"`, not REMAINDER: REMAINDER stops option parsing at the first
+    # positional, so the natural `ask "msg" --to hermes` died with the misleading
+    # "--to is required".  Trailing flags must keep working.
+    p_ask.add_argument("message", nargs="*")
     p_ask.set_defaults(func=cmd_ask)
 
     p_doctor = sub.add_parser(

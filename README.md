@@ -88,6 +88,19 @@ here — treat them as untested, not as supported.
 We would rather under-claim. A repo that says "works everywhere" and then fails on your setup
 wastes your afternoon; a repo that tells you exactly what was tested saves it.
 
+## Prerequisites for channel A (read this first)
+
+`ask --to mimo` drives **your** MiMoCode CLI. It does **not** ship a provider, a model list,
+or a credential, and it never writes one into your config.
+
+If your MiMoCode is not signed in and has no third-party provider configured, the CLI itself
+answers with something like `MiMo free API service has ended. Sign in or configure a
+third-party API.` — and channel A cannot work. **That is your call, not this repo's**: sign in,
+or point MiMoCode at a provider you choose. This project deliberately stays out of it.
+
+Channel B (the `hermes mcp serve` entry) has no such dependency: it only runs program code you
+already have.
+
 ## Requirements
 
 - Python **3.10+** (3.11+ recommended) — no third-party packages, ever.
@@ -347,6 +360,22 @@ Matching flags exist for every one of them (`--config`, `--mimo-bin`, `--hermes-
 15. **On Windows, killing a process kills only that process.** A hung MCP server with
     children can leave an orphan tree behind. The handshake has a timeout and closes
     the pipes, but a wedged server is not guaranteed to be reaped cleanly.
+16. **A Hermes home can be briefly unreadable.** Seen in the field: `hermes -z` exited 1
+    with `Cannot initialize Hermes directory <HOME>: [WinError 5] access is denied`, and
+    the *very next* run of the same command succeeded with nothing changed on disk — the
+    directory was momentarily locked (another Hermes process tightening ACLs, a scanner
+    holding it). `ask` now treats that as transient, **retries exactly once**, and prints
+    the **last** lines of stderr instead of only the first, so a flake no longer reads
+    like a broken install. A real permission problem still fails, with next steps.
+17. **`ask` accepts the message before or after the flags.** `bridge.py ask "msg" --to
+    hermes` used to die with `the following arguments are required: --to`: the message
+    positional used `argparse.REMAINDER`, and REMAINDER stops option parsing at the first
+    positional. Both orders work now.
+18. **`check` WARNs — and still exits 0 — when no model can be derived.** A model is only
+    needed by `ask --to mimo`; the MCP channel and `ask --to hermes` need none. It is a
+    warning rather than a failure on purpose: a FAIL there pushed readers towards `setup`,
+    i.e. towards this repo writing a provider block into your config, which it will not do
+    (see "Prerequisites for channel A").
 
 ## Security notes
 

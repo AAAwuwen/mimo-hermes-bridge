@@ -44,6 +44,18 @@ Codex 有 `codex mcp add <名字> -- <stdio 命令>`（配置在 `~/.codex/confi
 我们宁可少宣称。写着「到处都能用」却在你环境里挂掉的仓库，浪费你一下午；
 把测过什么、没测什么写清楚的仓库，能给你省下这一下午。
 
+## 通道 A 的前提（先看这条）
+
+`ask --to mimo` 驱动的是**你**的 MiMoCode CLI。本仓库**不带** provider、不带模型清单、不带凭据，
+也**从不往你的配置里写这些**。
+
+如果你的 MiMoCode 没有登录、也没有自己配第三方 API，CLI 自己会回一句类似
+`MiMo free API service has ended. Sign in or configure a third-party API.` —— 通道 A 就是不通。
+**这件事归你决定，不归本仓库**：要么登录，要么把 MiMoCode 指向你自己选的 provider。
+本项目刻意不碰这一层。
+
+通道 B（`hermes mcp serve` 那条）没有这个依赖：它只运行你机器上已有的程序。
+
 ## 环境要求
 
 - Python **3.10+**（推荐 3.11+）—— **永不引入第三方依赖**。
@@ -188,6 +200,17 @@ python bridge.py render --set HERMES_BIN=/path/to/hermes.exe
    `[0m[0m> build`。`bridge.py` 会剥掉；你自己的脚本大概也该剥。
 9. **旧代码页。** 中文 Windows 的控制台代码页不是 UTF-8；`bridge.py` 会把自己的 stdout/stderr
    重配为 UTF-8，免得非 ASCII 路径把它弄崩（或在被抓取的输出里变成乱码）。
+10. **Hermes 主目录可能瞬时不可读。** 现场案例：`hermes -z` 退出 1，报
+   `Cannot initialize Hermes directory <HOME>: [WinError 5] 拒绝访问`，而**紧接着**重跑同一条命令就成功，
+   磁盘上什么都没变 —— 目录被瞬时占用（另一个 Hermes 进程在收紧 ACL、杀软正在扫）。`ask` 现在把这类失败
+   判为**瞬时**并自动**重试一次**，且打印 stderr 的**末尾几行**而不是只打第一行，免得一次抖动看起来像装坏了。
+   真正的权限问题仍会报错，并给出下一步。
+11. **`ask` 的消息放在标志前或后都行。** `bridge.py ask "消息" --to hermes` 以前会报
+   `the following arguments are required: --to`（消息位置参数用了 `argparse.REMAINDER`，而 REMAINDER
+   会终止选项解析）。现在两种顺序都可以。
+12. **推不出模型时 `check` 只 WARN，退出码仍是 0。** 模型只挡 `ask --to mimo`；MCP 通道与
+   `ask --to hermes` 都不需要它。这里刻意用告警而非失败：判 FAIL 会把读者推向 `setup` —— 也就是让本仓库
+   往你的配置里写 provider，而它不会这么做（见「通道 A 的前提」）。
 
 ## 安全说明
 

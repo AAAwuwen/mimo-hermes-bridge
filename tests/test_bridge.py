@@ -453,7 +453,14 @@ class CheckCliTests(TempCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("HERMES_BIN", proc.stdout)
 
-    def test_fails_when_no_model_can_be_resolved(self):
+    def test_warns_when_no_model_can_be_resolved(self):
+        """Only `ask --to mimo` needs a model, so this is a WARN, not a FAIL.
+
+        It used to FAIL, which made `check` exit non-zero on a wiring that works
+        (the MCP channel and `ask --to hermes` need no model) and pointed the
+        reader at `setup` -- i.e. at bridge.py writing a provider block, which is
+        exactly what it must not do (AGENTS §10: the model is the user's choice).
+        """
         entry = expected_entry(sys.executable)
         self.write_config(json.dumps({"mcp": {"hermes": entry}}, indent=2))
         proc = run_bridge(
@@ -466,7 +473,8 @@ class CheckCliTests(TempCase):
             sys.executable,
             "--no-mcp-probe",
         )
-        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("WARN", proc.stdout)
         self.assertIn("MIMO_BRIDGE_MODEL", proc.stdout)
 
 
@@ -678,6 +686,93 @@ class AskCliTests(TempCase):
         proc = run_bridge("ask", "--to", "hermes", "--hermes-bin", sys.executable)
         self.assertEqual(proc.returncode, 2)
         self.assertIn("nothing to send", proc.stderr)
+
+    def test_message_before_flags_still_parses(self):
+        """`ask "msg" --to hermes` is the natural spelling -- REMAINDER broke it.
+
+        With REMAINDER the option scan stops at the first positional, so the flag
+        after the message was never seen and the error was "the following
+        arguments are required: --to", which reads like a missing flag rather
+        than an ordering trap.
+        """
+        proc = run_bridge(
+            "ask",
+            "ping",
+            "--to",
+            "hermes",
+            "--hermes-bin",
+            str(self.tmp / "nope" / "hermes.exe"),
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("HERMES_BIN", proc.stderr)
+        self.assertNotIn("required: --to", proc.stderr)
+
+
+class AskRetryTests(unittest.TestCase):
+    """A transient Hermes-home failure earns exactly one retry.
+
+    Field case 2026-09-18: `hermes -z` exited 1 with
+    `Cannot initialize Hermes directory <HOME>: [WinError 5] access denied`,
+    while the very next run of the same command succeeded with nothing changed
+    on disk.  A bridge that reports that as a hard failure sends the reader off
+    to reconfigure a working machine.
+    """
+
+    TRANSIENT_ERR = (
+        "Cannot initialize Hermes directory C:\\Users\\<USER>\\AppData\\Local\\hermes: "
+        "[WinError 5] access is denied"
+    )
+
+    def _run(self, results):
+        calls: list[list[str]] = []
+
+        def fake(cmd, **_ignored):
+            """Record the argv and replay the scripted results in order.
+
+            Accepts and ignores `run_capture`'s timeout/cwd: these cases are
+            about how many attempts happen, not about how each attempt runs.
+            """
+            calls.append(cmd)
+            return results[min(len(calls), len(results)) - 1]
+
+        with (
+            unittest.mock.patch.object(bridge, "run_capture", fake),
+            unittest.mock.patch.object(bridge.time, "sleep"),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            rc = bridge._report_reply(
+                "hermes",
+                ["hermes", "-z", "ping"],
+                30,
+                bridge._hermes_failure_hint,
+                retries=bridge.TRANSIENT_RETRIES,
+            )
+        return rc, calls, err.getvalue()
+
+    def test_transient_failure_is_retried_and_can_succeed(self):
+        rc, calls, err = self._run([(1, "", self.TRANSIENT_ERR), (0, "pong", "")])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("retrying", err)
+
+    def test_transient_failure_that_sticks_explains_itself(self):
+        rc, calls, err = self._run([(1, "", self.TRANSIENT_ERR)] * 2)
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(calls), 2, "one retry, never a loop")
+        self.assertIn("WinError 5", err)
+        self.assertIn("hermes doctor", err)
+
+    def test_a_real_failure_is_not_retried(self):
+        rc, calls, err = self._run([(1, "", "no credentials for provider testprov")])
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("hermes login", err)
+
+    def test_an_empty_reply_is_an_error_on_its_own(self):
+        rc, _, err = self._run([(0, "   ", "")])
+        self.assertEqual(rc, bridge.EXIT_EMPTY_REPLY)
+        self.assertIn("empty reply", err)
 
 
 class RestoreCliTests(TempCase):

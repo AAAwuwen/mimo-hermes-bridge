@@ -174,3 +174,26 @@ Hermes 报 242 条 strict 错误。实测：
 - **落地**：不做行数削减；`AGENTS.md` §6 的判据维持「lint 零告警 + 测试全绿」，**不设行数 KPI**。
 - **附**：Hermes 接受该裁决，并承认自己那次测量与样本引用不成立（已记入 `VERIFICATION.md` 的验收方自查节）。
 
+---
+
+## A2 · 三项修正（2026-09-18 深夜，Hermes 实施，MiMoCode 待复跑）
+
+1. **`ask` 的位置参数 `argparse.REMAINDER` → `nargs="*"`。**
+   - 理由：`ask "消息" --to hermes` 是最自然的写法；REMAINDER 会在第一个位置参数处**终止选项解析**，
+     于是报错变成 `the following arguments are required: --to` —— 把一个顺序陷阱伪装成缺参。
+   - 落地：回归测试 `test_message_before_flags_still_parses`。
+
+2. **瞬时失败自动重试一次（且只一次）。**
+   - 理由：现场 `hermes -z` 因 Hermes 主目录被瞬时占用（`[WinError 5] 拒绝访问`）退出 1，重跑即通。
+     桥若把它当硬失败，读的人会被引向「重装 / 改配置」。
+   - 规则：仅当 stderr 命中 `WinError 5 / 拒绝访问 / access is denied / Cannot initialize Hermes*`
+     才重试；**上限 1 次**，不进入循环。同时把失败输出从「首行」改为「末 4 行」——诊断在尾部。
+   - 反例保护：凭据类、模型类失败**不重试**（有测试）。
+
+3. **推不出模型时 `check` 由 FAIL 降为 WARN（退出码 1 → 0）。**
+   - 理由：模型只影响 `ask --to mimo`；MCP 通道与 `ask --to hermes` 不依赖它。
+     判 FAIL 会让 `check` 退出 1 并提示 `setup`，而 `setup` 的方向是往用户配置里写 provider ——
+     正是 AGENTS §10 禁止的越界。
+   - 影响面（有意变更，非为过 lint 改行为）：`CheckCliTests.test_fails_when_no_model_can_be_resolved`
+     改名为 `test_warns_when_no_model_can_be_resolved`，断言 `assertNotEqual(0)` → `assertEqual(0)`
+     + `assertIn("WARN", ...)`。
