@@ -160,3 +160,17 @@ Hermes 报 242 条 strict 错误。实测：
 4. **死代码 + 隐私**：`bridge.py` 顶部有个从未使用的常量，值是本机特有的模型 id。已删除。
 5. **`hermes -z` 与 `hermes mcp serve` 凭据作用域可能不同**：一条通不代表另一条通。已写进
    README 坑单 #14。
+
+---
+
+## A1 · 作者裁决（2026-09-18）：**不删**
+
+- **议题**：Hermes 提「docstring 约 200 行冗余，建议删减」。
+- **MiMoCode 反对**（三条，均已给命令与原始输出）：
+  1. Hermes 的「docstring 392 行 / 占 21%」是 **2.3 倍高估**——实际 185 行（函数 169 + 模块 16），占 1851 行的 10.0%；且按「行」量不是按「条」量。
+  2. Hermes 举的样本 `_empty_probe_result -> "Empty probe result."` **在 bridge.py 里不存在**（`grep "Empty probe result"` 无匹配）。
+  3. 72 条单行 docstring 承载的是**签名表达不了的契约信息**（`env_value` 补「空串=未设置」、`to_native_path` 补 Windows/MSYS 语义、`_kill` 补「teardown 不抛」等）；全部删掉天花板也只有 −10%，而唯一超标函数 `build_parser` 双方都同意不动。
+- **作者裁决：不删。**
+- **落地**：不做行数削减；`AGENTS.md` §6 的判据维持「lint 零告警 + 测试全绿」，**不设行数 KPI**。
+- **附**：Hermes 接受该裁决，并承认自己那次测量与样本引用不成立（已记入 `VERIFICATION.md` 的验收方自查节）。
+
